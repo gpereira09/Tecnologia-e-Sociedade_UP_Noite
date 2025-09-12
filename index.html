@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Observatório — Dashboard</title>
+  <meta name="description" content="Observatório de Segurança e Saúde no Trabalho: extração, tratamento e visualização de dados em um dashboard interativo (Python/Streamlit)." />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="container nav">
+      <div class="logo">
+        <div class="logo-mark" aria-hidden="true"></div>
+        <div>Observatório</div>
+      </div>
+      <nav class="nav-links" aria-label="Seções">
+        <a href="#sobre">Sobre</a>
+        <a href="#como-usar">Como usar</a>
+        <a href="#dashboard">Dashboard</a>
+        <a href="#dados">Dados & Metodologia</a>
+      </nav>
+      <div class="actions">
+        <button id="themeToggle" class="btn secondary" title="Alternar tema">Tema</button>
+        <a id="openNew" class="btn" href="#" target="_blank" rel="noopener">Abrir Dashboard</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- HERO -->
+  <section class="hero" id="sobre">
+    <div class="container">
+      <div class="wrap">
+        <div>
+          <h1>Sistema Agregador de Dados</h1>
+          <p class="lead">
+            Painel interativo com <b>Python + Streamlit</b> para acompanhar incidentes de
+            segurança e saúde no trabalho. Fluxo: <b>Extrair</b> (API/simulado) →
+            <b>Tratar</b> (limpeza & padronização) → <b>Visualizar</b> (KPIs e gráficos).
+          </p>
+          <div class="cta">
+            <a class="btn" id="scrollToDash" href="#dashboard">Ver Dashboard</a>
+            <a class="btn secondary" href="#dados">Entenda a metodologia</a>
+            <div class="stat" aria-live="polite">
+              <div class="dot" id="liveDot"></div>
+              <div><b>Status:</b> <span id="liveText">Checando servidor…</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card p-18">
+          <h2 class="tight">Pipeline do Projeto</h2>
+          <div class="grid-3">
+            <div class="feature">
+              <h3>1. Extrair</h3>
+              <p class="muted small">Coleta via API pública (<span class="kbd">requests</span>) ou dados simulados.</p>
+            </div>
+            <div class="feature">
+              <h3>2. Tratar</h3>
+              <p class="muted small">Limpeza com <span class="kbd">pandas</span>, padronização de colunas e datas.</p>
+            </div>
+            <div class="feature">
+              <h3>3. Visualizar</h3>
+              <p class="muted small">KPIs, gráficos por setor/lesão/origem e filtros interativos.</p>
+            </div>
+          </div>
+        </div>
+      </div> <!-- /wrap -->
+    </div>
+  </section>
+
+  <!-- COMO USAR -->
+  <section id="como-usar">
+    <div class="container card p-18">
+      <h2 class="tight">Como usar</h2>
+      <div class="grid-2">
+        <div>
+          <ol class="small">
+            <li>Ative o ambiente virtual e rode o app:
+              <div class="kbd">source .venv/bin/activate</div>
+              <div class="kbd">streamlit run codigo.py</div>
+            </li>
+            <li>Volte a esta página e clique em <b>Abrir Dashboard</b> ou role até a seção abaixo.</li>
+            <li>No painel, pressione <b>Executar Projeto</b> para carregar os dados.</li>
+          </ol>
+        </div>
+        <div class="muted small">
+          Dica: para servir esta landing como site local, na pasta do arquivo rode
+          <span class="kbd">python3 -m http.server 8080</span> e acesse
+          <span class="kbd">http://localhost:8080</span>.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DASHBOARD -->
+  <section id="dashboard">
+    <div class="container">
+      <div class="card frame-wrap" role="region" aria-label="Dashboard embutido">
+        <div class="frame-toolbar">
+          <div class="status">
+            <span id="statusBadge" class="badge warn">Conectando…</span>
+            <span class="muted small hide-mobile">Se o painel não carregar, abra em nova aba.</span>
+          </div>
+          <div class="actions">
+            <button class="btn secondary" id="reloadBtn">Recarregar</button>
+            <a class="btn" id="openNew2" href="#" target="_blank" rel="noopener">Abrir em nova aba</a>
+          </div>
+        </div>
+        <iframe id="dashFrame" title="Streamlit Dashboard"></iframe>
+      </div>
+    </div>
+  </section>
+
+  <!-- DADOS / METODOLOGIA -->
+  <section id="dados">
+    <div class="container grid-2">
+      <div class="card p-18">
+        <h2 class="tight">Fontes & Dados</h2>
+        <p class="small muted">
+          Nesta versão de demonstração os dados são <b>simulados</b> (1.000 registros) com:
+          <em>data</em>, <em>setor</em>, <em>região</em>, <em>tipo_lesão</em>, <em>origem</em>, <em>estado</em>.
+          Em produção, a extração deve consultar API oficial (ex.: <span class="kbd">dados.gov.br</span>)
+          com paginação e tratamento de falhas.
+        </p>
+        <ul class="small">
+          <li>Distribuições com <span class="kbd">numpy.random</span> para realismo.</li>
+          <li>Datas normalizadas (<span class="kbd">to_datetime</span>) e campos temporais.</li>
+          <li>Tabela filtrável + gráficos por Estado/Setor/Lesão/Origem.</li>
+        </ul>
+      </div>
+
+      <div class="card p-18">
+        <h2 class="tight">Boas práticas aplicadas</h2>
+        <ul class="small">
+          <li>Feedback de carregamento e mensagens por etapa.</li>
+          <li>Interface responsiva, acessível e com tema claro/escuro.</li>
+          <li>Opção de abrir o painel em outra aba para tela cheia.</li>
+          <li>Detecção automática de disponibilidade do servidor Streamlit.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">
+      <div class="small muted">© Observatório • Python + Streamlit • Front-end estático em HTML/CSS/JS</div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

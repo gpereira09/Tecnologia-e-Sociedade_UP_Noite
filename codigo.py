@@ -3,200 +3,386 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import requests
-import json
-import io
-import time
+import io, csv, unicodedata, re
+from typing import Optional, Tuple, List, Dict
 
-# Título da página no Streamlit
-st.set_page_config(layout="wide", page_title="Observatório de SST")
+st.set_page_config(page_title="Observatório — CSV (fix)", layout="wide")
 
-# Constantes e configurações
-API_URL = "https://example.com/api/data"  # URL de exemplo. Substitua pela URL da API real (e.g., dados.gov.br)
-DATA_FILE_PATH = "data/acidentes_sst.csv"
-DATA_GENERATION_DELAY = 2 # Simula o tempo de carregamento da API.
+# ---------------- Utilidades ----------------
+def _strip_accents(s: str) -> str:
+    if not isinstance(s, str):
+        return s
+    return ''.join(ch for ch in unicodedata.normalize('NFKD', s) if not unicodedata.combining(ch))
 
-# --- Funções de Ajuda ---
+def normalize_name(c: str) -> str:
+    c0 = _strip_accents(str(c).strip()).lower()
+    c0 = re.sub(r'[^0-9a-z]+', '_', c0)
+    c0 = re.sub(r'_+', '_', c0).strip('_')
+    return c0
 
-def exibir_loading():
-    """Exibe um indicador de progresso enquanto a simulação de dados carrega."""
-    with st.spinner("Carregando dados... Isso pode levar alguns segundos."):
-        time.sleep(DATA_GENERATION_DELAY)
-
-def pcm_to_wav(pcm_data, sample_rate):
-    """
-    Converte dados PCM brutos em um formato WAV para reprodução.
-    Esta função é necessária para reproduzir áudio de APIs que retornam
-    dados PCM. (Não usada neste projeto, mas mantida como exemplo)
-    """
-    header = np.array([
-        0x52494646,  # 'RIFF'
-        len(pcm_data) + 36,  # Tamanho do arquivo
-        0x57415645,  # 'WAVE'
-        0x666d7420,  # 'fmt '
-        16,  # Tamanho do chunk
-        1,  # Formato de áudio (PCM)
-        1,  # Número de canais
-        sample_rate,  # Taxa de amostragem
-        sample_rate * 2,  # Taxa de bytes
-        2,  # Alinhamento de bloco
-        16,  # Bits por amostra
-        0x64617461,  # 'data'
-        len(pcm_data)  # Tamanho dos dados
-    ], dtype='<u4')
-    
-    return io.BytesIO(header.tobytes() + pcm_data.tobytes())
-
-# --- Simulação de Extração de Dados ---
-
-def extrair_dados_api():
-    """
-    Simula a extração de dados de uma API governamental.
-    
-    Na implementação real do projeto, esta função deve fazer uma requisição
-    HTTP para a URL da API (e.g., dados.gov.br) e retornar os dados.
-    Aqui, criamos dados de exemplo para demonstração.
-    """
-    st.info("Simulando a extração de dados da API...")
-    exibir_loading()
-
-    # Criação de dados fictícios para demonstração
-    num_entries = 1000
-    estados = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
-    data = {
-        "id_acidente": range(1, num_entries + 1),
-        "data": pd.to_datetime(pd.date_range("2024-01-01", periods=num_entries, freq="D")),
-        "setor": np.random.choice(["Indústria", "Comércio", "Serviços", "Construção", "Agropecuária"], num_entries),
-        "regiao": np.random.choice(["Sudeste", "Sul", "Nordeste", "Centro-Oeste", "Norte"], num_entries),
-        "tipo_lesao": np.random.choice(["Corte", "Fratura", "Contusão", "Queimadura", "Outros"], num_entries, p=[0.4, 0.2, 0.2, 0.1, 0.1]),
-        "origem": np.random.choice(["Equipamento", "Queda", "Manuseio", "Ambiental", "Trânsito"], num_entries, p=[0.3, 0.25, 0.25, 0.1, 0.1]),
-        "estado": np.random.choice(estados, num_entries)
-    }
-    
-    # Criar um DataFrame a partir dos dados fictícios
-    df = pd.DataFrame(data)
-    
-    st.success("Dados extraídos com sucesso!")
+def normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = [normalize_name(c) for c in df.columns]
     return df
 
-# --- Tratamento de Dados com Pandas ---
+def ensure_unique_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove colunas duplicadas mantendo a primeira ocorrência."""
+    dup = df.columns.duplicated()
+    return df.loc[:, ~dup].copy()
 
-def tratar_dados(df):
-    """
-    Lida com o tratamento dos dados, como limpeza e padronização.
-    Esta função corresponde à tarefa 'Criar pipeline de limpeza de dados' do seu planejamento.
-    """
-    st.info("Iniciando o tratamento dos dados...")
+def sniff_delimiter(sample_bytes: bytes) -> Optional[str]:
+    try:
+        dialect = csv.Sniffer().sniff(sample_bytes.decode("latin1", errors="ignore"))
+        return dialect.delimiter
+    except Exception:
+        return None
 
-    # Exemplo de tratamento de dados:
-    # 1. Remover dados nulos (se existirem)
-    df = df.dropna()
-    
-    # 2. Padronizar o nome das colunas
-    df.columns = [col.lower().replace(" ", "_") for col in df.columns]
-    
-    # 3. Garantir que as colunas de data estão no formato correto
-    df['data'] = pd.to_datetime(df['data'])
-    
-    # 4. Criar colunas adicionais para análise (ex: mês, ano)
-    df['mes'] = df['data'].dt.month
-    df['ano'] = df['data'].dt.year
-    
-    st.success("Dados tratados com sucesso!")
-    return df
+def _read_bytes(src) -> bytes:
+    if hasattr(src, "read"):
+        return src.read()
+    elif isinstance(src, (bytes, bytearray)):
+        return bytes(src)
+    else:
+        with open(src, "rb") as f:
+            return f.read()
 
-# --- Geração de KPIs e Dashboards com Streamlit ---
+ENCODINGS_BR = ["latin1", "utf-8-sig", "utf-8", "cp1252"]
 
-def gerar_dashboards(df):
-    """
-    Cria os dashboards e visualizações para o usuário final.
-    Esta função utiliza o Streamlit para renderizar a interface.
-    """
-    st.header("Indicadores de Segurança no Trabalho")
+@st.cache_data(show_spinner=False)
+def load_csv_simple(src,
+                    sep_opt: Optional[str] = None,
+                    decimal_opt: str = ",",
+                    skiprows: int = 0,
+                    encodings: List[str] = ENCODINGS_BR) -> Tuple[pd.DataFrame, str, str]:
+    raw = _read_bytes(src)
+    seps = [sep_opt] if sep_opt else []
+    auto = sniff_delimiter(raw[:65536])
+    if auto: seps.append(auto)
+    for s in [";", ",", "\t", "|"]:
+        if s not in seps:
+            seps.append(s)
+    last_err = None
+    for enc in encodings:
+        for sep in seps:
+            try:
+                bio = io.BytesIO(raw)
+                df = pd.read_csv(
+                    bio, sep=sep, engine="python", encoding=enc,
+                    on_bad_lines="skip", quotechar='"', escapechar="\\",
+                    skiprows=skiprows, decimal=decimal_opt
+                )
+                if df.shape[1] >= 1:
+                    return df, enc, sep
+            except Exception as e:
+                last_err = e
+                continue
+    raise RuntimeError(f"Falha ao ler o CSV. Último erro: {last_err}")
+
+def ensure_datetime(df: pd.DataFrame, col: Optional[str]) -> Optional[str]:
+    if not col or col not in df.columns:
+        return None
+    try:
+        df[col] = pd.to_datetime(df[col], errors="coerce", dayfirst=True)
+    except Exception:
+        df[col] = pd.to_datetime(df[col], errors="coerce")
+    return col
+
+# ---- fallback de gradient (se não houver matplotlib) ----
+def style_heatmap(df: pd.DataFrame, cmap: str = "Blues"):
+    try:
+        import matplotlib  # noqa
+        return df.style.background_gradient(cmap=cmap)
+    except Exception:
+        return df
+
+# --------------- Mapeamento fixo p/ seu CSV ---------------
+FIX_MAP = {
+    "data":   "data_acidente",
+    "uf":     "uf_munic_acidente",
+    "setor":  "cnae2_0_empregador_1",     # descrição do CNAE
+    "lesao":  "natureza_da_lesao",
+    "origem": "agente_causador_acidente",
+    "tipo_acidente": "tipo_do_acidente",
+}
+
+# --------------- UF/Região helpers ---------------
+UF_SIGLAS = {
+    "acre":"AC","alagoas":"AL","amapa":"AP","amazonas":"AM","bahia":"BA",
+    "ceara":"CE","distrito federal":"DF","espirito santo":"ES","goias":"GO",
+    "maranhao":"MA","mato grosso":"MT","mato grosso do sul":"MS",
+    "minas gerais":"MG","para":"PA","paraiba":"PB","parana":"PR",
+    "pernambuco":"PE","piaui":"PI","rio de janeiro":"RJ",
+    "rio grande do norte":"RN","rio grande do sul":"RS",
+    "rondonia":"RO","roraima":"RR","santa catarina":"SC",
+    "sao paulo":"SP","sergipe":"SE","tocantins":"TO"
+}
+UF_REGIAO = {
+    "AC":"Norte","AP":"Norte","AM":"Norte","PA":"Norte","RO":"Norte","RR":"Norte","TO":"Norte",
+    "AL":"Nordeste","BA":"Nordeste","CE":"Nordeste","MA":"Nordeste","PB":"Nordeste","PE":"Nordeste","PI":"Nordeste","RN":"Nordeste","SE":"Nordeste",
+    "DF":"Centro-Oeste","GO":"Centro-Oeste","MT":"Centro-Oeste","MS":"Centro-Oeste",
+    "ES":"Sudeste","MG":"Sudeste","RJ":"Sudeste","SP":"Sudeste",
+    "PR":"Sul","RS":"Sul","SC":"Sul"
+}
+def normalize_uf_name(x: str) -> str:
+    x = _strip_accents(str(x)).strip().lower()
+    x = re.sub(r'\s+', ' ', x)
+    return x
+def derive_sigla_from_name(x: str) -> Optional[str]:
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return None
+    s = str(x).strip()
+    if re.fullmatch(r'[A-Za-z]{2}', s):
+        return s.upper()
+    key = normalize_uf_name(s)
+    return UF_SIGLAS.get(key)
+def derive_regiao_from_sigla(sigla: Optional[str]) -> Optional[str]:
+    if not sigla:
+        return None
+    return UF_REGIAO.get(sigla.upper())
+
+# --------------- UI / Fonte ---------------
+st.title("Observatório — CSV (mapeado)")
+with st.sidebar:
+    st.header("Fonte do CSV")
+    mode = st.radio("Como fornecer o arquivo?", ["Carregar arquivo", "Informar caminho local"], index=0)
+    default_path = "D.SDA.PDA.005.CAT.202505.csv"
+    upload = None
+    path = None
+    if mode == "Carregar arquivo":
+        upload = st.file_uploader("Envie seu .csv", type=["csv"])
+    else:
+        path = st.text_input("Caminho do CSV", value=default_path)
+
+    with st.expander("Opções avançadas (se precisar)"):
+        sep_label = st.selectbox("Delimitador", ["Automático", ";", ",", "\\t", "|"], index=0)
+        sep_opt = None if sep_label == "Automático" else ("\t" if sep_label == "\\t" else sep_label)
+        decimal_opt = st.selectbox("Separador decimal", [",", "."], index=0)
+        skiprows = st.number_input("Pular linhas iniciais", min_value=0, max_value=500, value=0, step=1)
+        enc_first = st.selectbox("Encoding preferido", ["latin1 (BR)", "utf-8-sig", "utf-8", "cp1252"], index=0)
+        enc_order = [enc_first.split(" ")[0]] + [e for e in ENCODINGS_BR if e != enc_first.split(" ")[0]]
+    run = st.button("Carregar dados")
+
+# --------------- Carregar & preparar ---------------
+if not run:
+    st.info("👈 Selecione/aponte o CSV e clique em **Carregar dados**.")
+    st.stop()
+
+src = upload if upload is not None else path
+if src in (None, ""):
+    st.error("Selecione o arquivo ou informe um caminho.")
+    st.stop()
+
+try:
+    df_raw, enc_used, sep_used = load_csv_simple(src, sep_opt=sep_opt, decimal_opt=decimal_opt,
+                                                 skiprows=skiprows, encodings=enc_order)
+    st.success(f"CSV carregado. **Encoding:** {enc_used} | **Separador:** {repr(sep_used)} | Linhas: {df_raw.shape[0]:,} | Colunas: {df_raw.shape[1]}")
+except Exception as e:
+    st.error(f"Não consegui ler seu CSV: {e}")
+    st.stop()
+
+# normalização + remoção de duplicadas
+df = normalize_headers(df_raw)
+df = ensure_unique_columns(df)
+
+# limpa espaços
+for c in df.select_dtypes(include=['object']).columns:
+    df[c] = df[c].astype(str).str.strip()
+
+# checa mapeamento existe
+missing = [FIX_MAP[k] for k in FIX_MAP if FIX_MAP[k] not in df.columns]
+if missing:
+    st.error(f"As colunas esperadas não foram encontradas após normalização: {missing}")
+    st.stop()
+
+# renomeia para nomes curtos e remove duplicadas novamente (evita choque com nomes já existentes)
+df = df.rename(columns={
+    FIX_MAP["data"]: "data",
+    FIX_MAP["uf"]: "uf",
+    FIX_MAP["setor"]: "setor",
+    FIX_MAP["lesao"]: "lesao",
+    FIX_MAP["origem"]: "origem",
+    FIX_MAP["tipo_acidente"]: "tipo_acidente",
+})
+df = ensure_unique_columns(df)
+
+# datas derivadas
+ensure_datetime(df, "data")
+if "data" in df:
+    df["ano"] = df["data"].dt.year
+    df["mes"] = df["data"].dt.to_period("M").astype(str)
+
+# uf/região
+df["uf_sigla"] = df["uf"].apply(derive_sigla_from_name)
+df["regiao"] = df["uf_sigla"].apply(derive_regiao_from_sigla)
+
+# --------------- Filtros globais ---------------
+st.header("Filtros globais")
+f1, f2, f3, f4, f5 = st.columns(5)
+df_f = df.copy()
+
+ufs = sorted([u for u in df["uf_sigla"].dropna().unique().tolist() if u])
+uf_sel = f1.multiselect("UF (sigla)", ufs, default=["PR"] if "PR" in ufs else [])
+if uf_sel:
+    df_f = df_f[df_f["uf_sigla"].isin(uf_sel)]
+
+regioes = sorted([r for r in df["regiao"].dropna().unique().tolist() if r])
+reg_sel = f2.multiselect("Região", regioes, default=[])
+if reg_sel:
+    df_f = df_f[df_f["regiao"].isin(reg_sel)]
+
+if "mes" in df:
+    meses = sorted(df["mes"].dropna().unique().tolist())
+    mes_sel = f3.selectbox("Mês (YYYY-MM)", ["(todos)"] + meses, index=0)
+    if mes_sel != "(todos)":
+        df_f = df_f[df_f["mes"] == mes_sel]
+
+if "ano" in df:
+    anos = sorted(df["ano"].dropna().unique().tolist())
+    ano_sel = f4.selectbox("Ano", ["(todos)"] + anos, index=0)
+    if ano_sel != "(todos)":
+        df_f = df_f[df_f["ano"] == ano_sel]
+
+tipo_opts = sorted(df["tipo_acidente"].dropna().astype(str).unique().tolist())
+tipo_sel = f5.multiselect("Tipo de acidente", tipo_opts, default=[])
+if tipo_sel:
+    df_f = df_f[df_f["tipo_acidente"].astype(str).isin(tipo_sel)]
+
+with st.expander("🔎 Filtro por termo (texto livre)"):
+    termo = st.text_input("Digite um termo para filtrar (procura em colunas de texto). Deixe vazio para ignorar.")
+    if termo:
+        termo_lower = termo.lower()
+        text_cols = [c for c in df_f.columns if df_f[c].dtype == "object"]
+        mask = pd.Series(False, index=df_f.index)
+        for c in text_cols:
+            mask = mask | df_f[c].astype(str).str.lower().str.contains(termo_lower, na=False)
+        df_f = df_f[mask]
+
+# --------------- Abas / Dashboards ---------------
+tabs = st.tabs([
+    "📊 Visão geral", "⏱ Série temporal", "🗺️ UF/Região",
+    "🏭 Setor/CNAE", "🩹 Tipo de Lesão", "⚙️ Origem/Causa",
+    "📋 Dados + Download"
+])
+
+# Visão geral
+with tabs[0]:
+    st.subheader("Visão geral (dados filtrados)")
+    k1, k2, k3, k4 = st.columns(4)
+    total = df_f.shape[0]
+    with k1: st.metric("Registros", f"{total:,}")
+
+    if "mes" in df_f and df_f["mes"].notna().any():
+        serie = df_f.groupby("mes").size().sort_index()
+        ultimo = int(serie.iloc[-1])
+        delta = int(ultimo - (serie.iloc[-2] if len(serie) > 1 else 0))
+        with k2: st.metric("Último mês (qtd.)", f"{ultimo:,}", delta=f"{delta:+,}")
+    else:
+        with k2: st.metric("Último mês (qtd.)", "—")
+
+    with k3: st.metric("UFs cobertas", f"{df_f['uf_sigla'].nunique():,}")
+    with k4: st.metric("Setores/CNAE (descrições)", f"{df_f['setor'].nunique():,}")
+
     st.markdown("---")
-    
-    # Filtro para o Paraná
-    df_parana = df[df['estado'] == 'PR']
-    total_acidentes_parana = df_parana.shape[0]
+    cA, cB = st.columns([2, 1])
+    with cA:
+        if "mes" in df_f and df_f["mes"].notna().any():
+            st.caption("Registros por mês")
+            st.line_chart(df_f.groupby("mes").size().sort_index())
+        else:
+            st.info("Não há coluna de mês derivada (verifique 'data_acidente').")
+    with cB:
+        top_n = st.number_input("Top N (rankings)", min_value=5, max_value=50, value=10, step=1)
+        st.caption(f"Top {top_n} — UF")
+        st.bar_chart(df_f["uf_sigla"].value_counts().head(top_n))
+        st.caption(f"Top {top_n} — Setor/CNAE (descr.)")
+        st.bar_chart(df_f["setor"].astype(str).value_counts().head(top_n))
 
-    # KPI 1: Número Total de Acidentes (geral)
-    total_acidentes = df.shape[0]
-    st.subheader(f"Número Total de Acidentes (Geral): :blue[{total_acidentes}]")
-    
-    # KPI 2: Número de Acidentes no Paraná
-    st.subheader(f"Acidentes Registrados no Paraná: :red[{total_acidentes_parana}]")
-    st.markdown("---")
+# Série temporal
+with tabs[1]:
+    st.subheader("Série temporal — registros por mês")
+    if "mes" in df_f and df_f["mes"].notna().any():
+        st.line_chart(df_f.groupby("mes").size().sort_index())
+        st.markdown("###### Desagregar por dimensão (opcional)")
+        dim = st.selectbox("Dimensão", ["(nenhuma)", "uf_sigla", "regiao", "setor", "lesao", "origem", "tipo_acidente"], index=0)
+        if dim != "(nenhuma)":
+            top5 = df_f[dim].astype(str).value_counts().head(5).index.tolist()
+            st.caption("Top 5 categorias ao longo do tempo (por mês)")
+            st.line_chart(
+                df_f[df_f[dim].astype(str).isin(top5)]
+                .groupby(["mes", dim])
+                .size()
+                .unstack(fill_value=0)
+                .sort_index()
+            )
+    else:
+        st.info("Não foi possível derivar 'mes' (verifique 'data_acidente').")
 
-    # Gráfico de Acidentes por Setor no Paraná
-    st.subheader("Acidentes por Setor no Paraná")
-    acidentes_por_setor_pr = df_parana['setor'].value_counts()
-    st.bar_chart(acidentes_por_setor_pr)
-    
-    st.markdown("---")
-    
-    # Gráfico de Acidentes por Tipo de Lesão no Paraná
-    st.subheader("Acidentes por Tipo de Lesão no Paraná")
-    acidentes_por_lesao_pr = df_parana['tipo_lesao'].value_counts()
-    st.bar_chart(acidentes_por_lesao_pr)
+# UF/Região
+with tabs[2]:
+    st.subheader("Distribuição por UF e Região")
+    colA, colB = st.columns(2)
+    with colA:
+        st.caption("Por UF (sigla)")
+        st.bar_chart(df_f["uf_sigla"].value_counts())
+    with colB:
+        st.caption("Por Região")
+        st.bar_chart(df_f["regiao"].value_counts())
 
-    st.markdown("---")
+    st.markdown("###### Cruzamento: UF × outra dimensão")
+    dim = st.selectbox("Dimensão", ["(nenhuma)", "setor", "lesao", "origem", "tipo_acidente"], index=0, key="ufx")
+    if dim != "(nenhuma)":
+        piv = pd.pivot_table(df_f, index="uf_sigla", columns=dim, aggfunc="size", fill_value=0)
+        st.dataframe(style_heatmap(piv, "Greens"), use_container_width=True)
 
-    # Gráfico de Acidentes por Origem no Paraná
-    st.subheader("Acidentes por Origem no Paraná")
-    acidentes_por_origem_pr = df_parana['origem'].value_counts()
-    st.bar_chart(acidentes_por_origem_pr)
+# Setor/CNAE
+with tabs[3]:
+    st.subheader("Distribuição por Setor/CNAE (descrição)")
+    top_n = st.slider("Top N", 5, 50, 20, step=1, key="setorn")
+    st.bar_chart(df_f["setor"].astype(str).value_counts().head(top_n))
 
-    st.markdown("---")
-    
-    # Filtros e Tabela de Dados
-    st.subheader("Dados Brutos e Filtros")
-    
-    setores_unicos = df['setor'].unique()
-    regioes_unicas = df['regiao'].unique()
-    tipos_lesao_unicos = df['tipo_lesao'].unique()
-    origens_unicas = df['origem'].unique()
+    st.markdown("###### Cruzamento: Setor × UF")
+    piv = pd.pivot_table(df_f, index="setor", columns="uf_sigla", aggfunc="size", fill_value=0)
+    st.dataframe(style_heatmap(piv.head(40), "Blues"), use_container_width=True)
 
-    setor_selecionado = st.selectbox("Selecione o Setor", ["Todos"] + list(setores_unicos))
-    regiao_selecionada = st.selectbox("Selecione a Região", ["Todas"] + list(regioes_unicas))
-    tipo_lesao_selecionada = st.selectbox("Selecione o Tipo de Lesão", ["Todos"] + list(tipos_lesao_unicos))
-    origem_selecionada = st.selectbox("Selecione a Origem do Acidente", ["Todas"] + list(origens_unicas))
+# Tipo de Lesão
+with tabs[4]:
+    st.subheader("Distribuição por Tipo de Lesão")
+    top_n = st.slider("Top N", 5, 50, 20, step=1, key="lesaon")
+    st.bar_chart(df_f["lesao"].astype(str).value_counts().head(top_n))
 
-    df_filtrado = df.copy()
-    if setor_selecionado != "Todos":
-        df_filtrado = df_filtrado[df_filtrado['setor'] == setor_selecionado]
-    if regiao_selecionada != "Todas":
-        df_filtrado = df_filtrado[df_filtrado['regiao'] == regiao_selecionada]
-    if tipo_lesao_selecionada != "Todos":
-        df_filtrado = df_filtrado[df_filtrado['tipo_lesao'] == tipo_lesao_selecionada]
-    if origem_selecionada != "Todas":
-        df_filtrado = df_filtrado[df_filtrado['origem'] == origem_selecionada]
-        
-    st.write(f"Mostrando {df_filtrado.shape[0]} registros.")
-    st.dataframe(df_filtrado)
+    cruzar = st.selectbox("Cruzar com:", ["(nenhuma)", "uf_sigla", "setor", "origem", "regiao", "tipo_acidente"], index=0)
+    if cruzar != "(nenhuma)":
+        piv = pd.pivot_table(df_f, index="lesao", columns=cruzar, aggfunc="size", fill_value=0)
+        st.dataframe(style_heatmap(piv.head(40), "Oranges"), use_container_width=True)
 
-# --- Função Principal ---
+# Origem/Causa
+with tabs[5]:
+    st.subheader("Distribuição por Origem/Causa (Agente Causador)")
+    top_n = st.slider("Top N", 5, 50, 20, step=1, key="origemn")
+    st.bar_chart(df_f["origem"].astype(str).value_counts().head(top_n))
 
-def main():
-    """
-    Função principal que orquestra a execução das etapas do projeto.
-    """
-    st.title("Sistema Agregador de Dados de SST")
-    st.markdown("""
-        Bem-vindo ao sistema de agregação e visualização de dados de segurança no trabalho.
-        Este projeto extrai, trata e apresenta dados em um dashboard interativo.
-    """)
-    
-    if st.button("Executar Projeto"):
-        # Etapa 1: Extração
-        df_bruto = extrair_dados_api()
-        
-        # Etapa 2: Tratamento
-        df_tratado = tratar_dados(df_bruto)
-        
-        # Etapa 3: Visualização
-        gerar_dashboards(df_tratado)
+    st.markdown("###### Cruzamento: Origem/Causa × UF")
+    piv = pd.pivot_table(df_f, index="origem", columns="uf_sigla", aggfunc="size", fill_value=0)
+    st.dataframe(style_heatmap(piv.head(40), "Purples"), use_container_width=True)
 
-# Executa a função principal quando o script é iniciado
-if __name__ == "__main__":
-    main()
+# Dados + Download
+with tabs[6]:
+    st.subheader("Dados brutos (após filtros)")
+    st.write(f"Mostrando {df_f.shape[0]:,} registros.")
+    st.dataframe(df_f, use_container_width=True)
+    st.download_button("⬇️ Baixar CSV filtrado",
+                       data=df_f.to_csv(index=False).encode("utf-8-sig"),
+                       file_name="dados_filtrados.csv", mime="text/csv")
 
+# Perfil opcional
+with st.expander("🧭 Perfil do dataset"):
+    n_rows, n_cols = df.shape
+    st.caption(f"**Linhas:** {n_rows:,} | **Colunas:** {n_cols}")
+    profile = pd.DataFrame({
+        "coluna": df.columns,
+        "dtype": [str(t) for t in df.dtypes.values],
+        "n_nulos": [int(df[c].isna().sum()) for c in df.columns],
+        "%_nulos": [round(df[c].isna().mean()*100, 2) for c in df.columns],
+        "n_unicos": [int(df[c].nunique(dropna=True)) for c in df.columns],
+    })
+    st.dataframe(profile, use_container_width=True)
