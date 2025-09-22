@@ -100,6 +100,7 @@ FIX_MAP = {
     "data":   "data_acidente",
     "uf":     "uf_munic_acidente",
     "setor":  "cnae2_0_empregador_1",     # descrição do CNAE
+    "cnae_codigo": "cnae2_0_empregador",  # código numérico do CNAE
     "lesao":  "natureza_da_lesao",
     "origem": "agente_causador_acidente",
     "tipo_acidente": "tipo_do_acidente",
@@ -164,7 +165,7 @@ with st.sidebar:
 
 # --------------- Carregar & preparar ---------------
 if not run:
-    st.info("👈 Selecione/aponte o CSV e clique em **Carregar dados**.")
+    st.info("👈 Selecione/aponte o CSV and clique em **Carregar dados**.")
     st.stop()
 
 src = upload if upload is not None else path
@@ -199,6 +200,7 @@ df = df.rename(columns={
     FIX_MAP["data"]: "data",
     FIX_MAP["uf"]: "uf",
     FIX_MAP["setor"]: "setor",
+    FIX_MAP["cnae_codigo"]: "cnae_codigo",
     FIX_MAP["lesao"]: "lesao",
     FIX_MAP["origem"]: "origem",
     FIX_MAP["tipo_acidente"]: "tipo_acidente",
@@ -217,35 +219,52 @@ df["regiao"] = df["uf_sigla"].apply(derive_regiao_from_sigla)
 
 # --------------- Filtros globais ---------------
 st.header("Filtros globais")
-f1, f2, f3, f4, f5 = st.columns(5)
+f1, f2, f3, f4, f5, f6 = st.columns(6)
 df_f = df.copy()
 
+# Filtro por UF
 ufs = sorted([u for u in df["uf_sigla"].dropna().unique().tolist() if u])
 uf_sel = f1.multiselect("UF (sigla)", ufs, default=["PR"] if "PR" in ufs else [])
 if uf_sel:
     df_f = df_f[df_f["uf_sigla"].isin(uf_sel)]
 
+# Filtro por Região
 regioes = sorted([r for r in df["regiao"].dropna().unique().tolist() if r])
 reg_sel = f2.multiselect("Região", regioes, default=[])
 if reg_sel:
     df_f = df_f[df_f["regiao"].isin(reg_sel)]
 
+# Filtro por Mês
 if "mes" in df:
     meses = sorted(df["mes"].dropna().unique().tolist())
     mes_sel = f3.selectbox("Mês (YYYY-MM)", ["(todos)"] + meses, index=0)
     if mes_sel != "(todos)":
         df_f = df_f[df_f["mes"] == mes_sel]
 
+# Filtro por Ano
 if "ano" in df:
     anos = sorted(df["ano"].dropna().unique().tolist())
     ano_sel = f4.selectbox("Ano", ["(todos)"] + anos, index=0)
     if ano_sel != "(todos)":
         df_f = df_f[df_f["ano"] == ano_sel]
 
+# Filtro por Tipo de Acidente
 tipo_opts = sorted(df["tipo_acidente"].dropna().astype(str).unique().tolist())
 tipo_sel = f5.multiselect("Tipo de acidente", tipo_opts, default=[])
 if tipo_sel:
     df_f = df_f[df_f["tipo_acidente"].astype(str).isin(tipo_sel)]
+
+# Filtro por CNAE (código)
+cnae_codigos = sorted([c for c in df["cnae_codigo"].dropna().unique().tolist() if c])
+cnae_sel = f6.multiselect("CNAE (código)", cnae_codigos, default=[])
+if cnae_sel:
+    df_f = df_f[df_f["cnae_codigo"].astype(str).isin(cnae_sel)]
+
+# Filtro adicional por descrição do CNAE
+cnae_descricoes = sorted([d for d in df["setor"].dropna().unique().tolist() if d])
+cnae_desc_sel = st.multiselect("CNAE (setor/atividade)", cnae_descricoes, default=[], key="cnae_desc")
+if cnae_desc_sel:
+    df_f = df_f[df_f["setor"].astype(str).isin(cnae_desc_sel)]
 
 with st.expander("🔎 Filtro por termo (texto livre)"):
     termo = st.text_input("Digite um termo para filtrar (procura em colunas de texto). Deixe vazio para ignorar.")
@@ -280,7 +299,7 @@ with tabs[0]:
         with k2: st.metric("Último mês (qtd.)", "—")
 
     with k3: st.metric("UFs cobertas", f"{df_f['uf_sigla'].nunique():,}")
-    with k4: st.metric("Setores/CNAE (descrições)", f"{df_f['setor'].nunique():,}")
+    with k4: st.metric("Setores/Atividades", f"{df_f['setor'].nunique():,}")
 
     st.markdown("---")
     cA, cB = st.columns([2, 1])
@@ -294,7 +313,7 @@ with tabs[0]:
         top_n = st.number_input("Top N (rankings)", min_value=5, max_value=50, value=10, step=1)
         st.caption(f"Top {top_n} — UF")
         st.bar_chart(df_f["uf_sigla"].value_counts().head(top_n))
-        st.caption(f"Top {top_n} — Setor/CNAE (descr.)")
+        st.caption(f"Top {top_n} — Setor/Atividade")
         st.bar_chart(df_f["setor"].astype(str).value_counts().head(top_n))
 
 # Série temporal
@@ -336,7 +355,7 @@ with tabs[2]:
 
 # Setor/CNAE
 with tabs[3]:
-    st.subheader("Distribuição por Setor/CNAE (descrição)")
+    st.subheader("Distribuição por Setor/Atividade Econômica")
     top_n = st.slider("Top N", 5, 50, 20, step=1, key="setorn")
     st.bar_chart(df_f["setor"].astype(str).value_counts().head(top_n))
 
