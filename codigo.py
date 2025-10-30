@@ -2982,6 +2982,7 @@ def create_municipio_mapping_file():
 521370-Montes Claros	Montes Claros
 521375-Montividiu	Montividiu
 521380-Morrinhos-Go	Morrinhos Go
+521380-Morrinhos-Go	Morrinhos Go
 521400-Mozarlândia	Mozarlândia
 521400-Mozarlândia	Mozarlândia
 521440-Nazário	Nazário
