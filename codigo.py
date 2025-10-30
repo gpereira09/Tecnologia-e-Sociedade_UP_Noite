@@ -2983,6 +2983,7 @@ def create_municipio_mapping_file():
 521375-Montividiu	Montividiu
 521380-Morrinhos-Go	Morrinhos Go
 521400-Mozarlândia	Mozarlândia
+521400-Mozarlândia	Mozarlândia
 521440-Nazário	Nazário
 521450-Nerópolis	Nerópolis
 521460-Niquelândia	Niquelândia
